@@ -78,17 +78,20 @@ def register_handlers(dp, agent_bridge: AgentBridge) -> None:
                 chunks = split_for_telegram(escaped_response)
                 for chunk in chunks:
                     await message.answer(chunk, parse_mode="MarkdownV2")
+                with contextlib.suppress(Exception):
+                    await status_message.delete()
             else:
                 error_text = "\u274c No response generated. Try again!"
                 await status_message.edit_text(markdownify(error_text), parse_mode="MarkdownV2")
 
-        except (RuntimeError, ValueError, OSError) as e:
-            logger.exception("Error during message handling")
-            error_text = f"\u274c Error: {e!s}"
+        except Exception as e:
+            logger.exception("Error during message handling: %s", type(e).__name__)
+            error_text = f"\u274c Error: {type(e).__name__}: {e!s}"
             try:
                 await status_message.edit_text(markdownify(error_text), parse_mode="MarkdownV2")
-            except (RuntimeError, ValueError, OSError):
-                await message.answer(markdownify(error_text), parse_mode="MarkdownV2")
+            except (RuntimeError, ValueError, OSError, ConnectionError):
+                with contextlib.suppress(RuntimeError, ValueError, OSError, ConnectionError):
+                    await message.answer(markdownify(error_text), parse_mode="MarkdownV2")
         finally:
             typing_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
