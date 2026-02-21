@@ -1,0 +1,33 @@
+# Production docker-compose - uses pre-built images from GHCR
+# This file is used by CI/CD for remote deployment via SSH
+services:
+  fast_aiogentic:
+    image: ${IMAGE_NAME}:${IMAGE_TAG:-latest}
+    container_name: fast-aiogentic
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - ENV=production
+      - LOG_LEVEL=info
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    networks:
+      - edge
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.fast-aiogentic.rule=Host(`${BASE_DOMAIN:-fast-aiogentic.bartix.de}`)"
+      - "traefik.http.routers.fast-aiogentic.entrypoints=websecure"
+      - "traefik.http.routers.fast-aiogentic.tls.certresolver=letsencrypt"
+      - "traefik.http.services.fast-aiogentic.loadbalancer.server.port=8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  edge:
+    external: true

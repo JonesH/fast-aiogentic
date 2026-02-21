@@ -1,0 +1,233 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Deploy specific image tag (skip CI/build). Leave empty for full pipeline.'
+        required: false
+        type: string
+
+
+env:
+  PYTHON_VERSION: "3.13"
+
+  REGISTRY: ghcr.io
+
+
+jobs:
+  ci:
+    name: Test
+    runs-on: ubuntu-latest
+
+    # Skip CI when deploying a specific tag
+    if: ${{ !inputs.tag }}
+
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check src/ tests/
+
+      - name: Type check
+        run: uv run ty check src/
+
+      - name: Test with coverage
+        run: uv run pytest tests/ -v --cov=fast_aiogentic --cov-report=term-missing --cov-fail-under=75
+
+
+  build-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: ci
+    # Skip build when deploying a specific tag, or on PRs
+    if: ${{ !inputs.tag && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ github.sha }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set lowercase image name
+        id: image
+        run: |
+          echo "name=$(echo 'ghcr.io/${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        run: |
+          docker build -t ${{ steps.image.outputs.name }}:${{ github.sha }} -t ${{ steps.image.outputs.name }}:latest .
+          docker push ${{ steps.image.outputs.name }}:${{ github.sha }}
+          docker push ${{ steps.image.outputs.name }}:latest
+
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build-push
+    # Run after build-push OR immediately if deploying specific tag
+    if: ${{ always() && (needs.build-push.result == 'success' || inputs.tag) }}
+    environment: production
+    outputs:
+      previous_tag: ${{ steps.backup.outputs.previous_tag }}
+      deployed_tag: ${{ steps.set-tag.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine image tag
+        id: set-tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "Deploying manually specified tag: ${{ inputs.tag }}"
+          else
+            echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "Deploying newly built tag: ${{ github.sha }}"
+          fi
+
+      - name: Set lowercase image name
+        id: image
+        run: |
+          echo "name=$(echo 'ghcr.io/${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Save current image tag for rollback
+        id: backup
+        env:
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/docker-volumes/fast-aiogentic' }}
+        run: |
+          PREV_TAG=$(ssh ${{ secrets.SSH_USER || 'deploy' }}@${{ secrets.SSH_HOST }} "grep IMAGE_TAG $DEPLOY_PATH/.env 2>/dev/null | cut -d= -f2" || echo "none")
+          echo "previous_tag=$PREV_TAG" >> $GITHUB_OUTPUT
+          echo "Previous IMAGE_TAG: $PREV_TAG"
+
+      - name: Create .env file on server
+        env:
+          SSH_USER: ${{ secrets.SSH_USER || 'deploy' }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/docker-volumes/fast-aiogentic' }}
+          BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
+          IMAGE_TAG: ${{ steps.set-tag.outputs.tag }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: |
+          ssh $SSH_USER@$SSH_HOST "mkdir -p $DEPLOY_PATH && cat > $DEPLOY_PATH/.env << ENVEOF
+          IMAGE_NAME=$IMAGE_NAME
+          IMAGE_TAG=$IMAGE_TAG
+          BASE_DOMAIN=$BASE_DOMAIN
+          DEPLOY_PATH=$DEPLOY_PATH
+          ENVEOF"
+
+      - name: Login to GHCR on server
+        env:
+          DOCKER_HOST: ssh://${{ secrets.SSH_USER || 'deploy' }}@${{ secrets.SSH_HOST }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Deploy via Docker SSH
+        env:
+          DOCKER_HOST: ssh://${{ secrets.SSH_USER || 'deploy' }}@${{ secrets.SSH_HOST }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          IMAGE_TAG: ${{ steps.set-tag.outputs.tag }}
+          BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
+        run: |
+          docker compose -f docker-compose.prod.yml pull
+          docker compose -f docker-compose.prod.yml down --remove-orphans || true
+          docker compose -f docker-compose.prod.yml up -d --force-recreate
+
+      - name: Health check
+        run: |
+          sleep 15
+          for i in {1..30}; do
+            if curl -sf https://${{ vars.BASE_DOMAIN }}/health; then
+              echo "Health check passed"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying..."
+            sleep 3
+          done
+          echo "Health check failed after 30 attempts"
+          exit 1
+
+  rollback:
+    name: Rollback on Failure
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: ${{ failure() && needs.deploy.result == 'failure' && !inputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set lowercase image name
+        id: image
+        run: |
+          echo "name=$(echo 'ghcr.io/${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Login to GHCR for rollback
+        env:
+          DOCKER_HOST: ssh://${{ secrets.SSH_USER || 'deploy' }}@${{ secrets.SSH_HOST }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Restore previous version
+        env:
+          PREVIOUS_TAG: ${{ needs.deploy.outputs.previous_tag }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          IMAGE_TAG: ${{ needs.deploy.outputs.previous_tag }}
+          DOCKER_HOST: ssh://${{ secrets.SSH_USER || 'deploy' }}@${{ secrets.SSH_HOST }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/docker-volumes/fast-aiogentic' }}
+          SSH_USER: ${{ secrets.SSH_USER || 'deploy' }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
+        run: |
+          if [ "$PREVIOUS_TAG" != "none" ] && [ -n "$PREVIOUS_TAG" ]; then
+            echo "Rolling back to IMAGE_TAG=$PREVIOUS_TAG"
+            ssh $SSH_USER@$SSH_HOST "sed -i 's/IMAGE_TAG=.*/IMAGE_TAG=$PREVIOUS_TAG/' $DEPLOY_PATH/.env"
+            docker compose -f docker-compose.prod.yml down --remove-orphans || true
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d --force-recreate
+            echo "Rolled back successfully"
+          else
+            echo "No previous version to restore"
+          fi
+
