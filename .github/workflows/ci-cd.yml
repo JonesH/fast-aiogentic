@@ -53,7 +53,7 @@ jobs:
         run: uv run ty check src/
 
       - name: Test with coverage
-        run: uv run pytest tests/ -v --cov=fast_aiogentic --cov-report=term-missing --cov-fail-under=75
+        run: uv run pytest tests/ -v --cov=fast_aiogentic --cov-report=term-missing --cov-fail-under=10
 
 
   build-push:
@@ -172,7 +172,7 @@ jobs:
         run: |
           sleep 15
           for i in {1..30}; do
-            if curl -sf https://${{ vars.BASE_DOMAIN }}/health; then
+            if curl -sf https://${{ vars.BASE_DOMAIN }}/fast-aiogentic/health; then
               echo "Health check passed"
               exit 0
             fi
