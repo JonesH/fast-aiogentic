@@ -91,6 +91,7 @@ max-args = 8
 # ============================================================================
 [tool.ty.environment]
 python-version = "3.13"
+python = ".venv"
 
 [tool.ty.rules]
 unresolved-import = "error"
