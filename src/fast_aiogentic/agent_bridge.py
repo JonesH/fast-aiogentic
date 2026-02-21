@@ -151,8 +151,9 @@ class AgentBridge:
             chunk_queue: asyncio.Queue[str | None] = asyncio.Queue()
             _background_tasks: set[asyncio.Task[None]] = set()
 
-            def stream_callback(chunk: str) -> None:
-                task = asyncio.create_task(chunk_queue.put(chunk))
+            def stream_callback(chunk: Any) -> None:  # noqa: ANN401
+                text = chunk.text if hasattr(chunk, "text") else str(chunk)
+                task = asyncio.create_task(chunk_queue.put(text))
                 _background_tasks.add(task)
                 task.add_done_callback(_background_tasks.discard)
 
