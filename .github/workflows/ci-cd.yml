@@ -142,12 +142,18 @@ jobs:
           BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
           IMAGE_TAG: ${{ steps.set-tag.outputs.tag }}
           IMAGE_NAME: ${{ steps.image.outputs.name }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           ssh $SSH_USER@$SSH_HOST "mkdir -p $DEPLOY_PATH && cat > $DEPLOY_PATH/.env << ENVEOF
           IMAGE_NAME=$IMAGE_NAME
           IMAGE_TAG=$IMAGE_TAG
           BASE_DOMAIN=$BASE_DOMAIN
           DEPLOY_PATH=$DEPLOY_PATH
+          TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
+          OPENROUTER_API_KEY=$OPENROUTER_API_KEY
+          WEBHOOK_ENABLED=true
+          WEBHOOK_URL=https://$BASE_DOMAIN/fast-aiogentic/webhook
           ENVEOF"
 
       - name: Login to GHCR on server
