@@ -1,0 +1,23 @@
+# fast-agent configuration for fast-aiogentic bot
+
+default_model: openrouter.x-ai/grok-3-mini
+
+openrouter:
+  api_key: ${OPENROUTER_API_KEY}
+
+mcp:
+  elicitation:
+    disabled: true
+
+  servers:
+    context7:
+      command: "npx"
+      args: ["-y", "@upstash/context7-mcp@latest"]
+
+conversation:
+  max_history: 20
+  save_context: true
+
+logger:
+  show_tools: true
+  truncate_tools: false

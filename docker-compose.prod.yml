@@ -1,33 +1,45 @@
-# Production docker-compose - uses pre-built images from GHCR
-# This file is used by CI/CD for remote deployment via SSH
 services:
-  fast_aiogentic:
-    image: ${IMAGE_NAME}:${IMAGE_TAG:-latest}
+  fast-aiogentic:
+    image: ${IMAGE_NAME:-ghcr.io/jonesh/fast-aiogentic}:${IMAGE_TAG:-latest}
     container_name: fast-aiogentic
     restart: unless-stopped
-    env_file:
-      - .env
+    env_file: .env
     environment:
-      - ENV=production
-      - LOG_LEVEL=info
-    volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
+      - WEBHOOK_ENABLED=true
+      - WEBHOOK_HOST=0.0.0.0
+      - WEBHOOK_PORT=8000
+      - WEBHOOK_URL=https://${BASE_DOMAIN:-jonaheidsick.de}/fast-aiogentic/webhook
+      - WEBHOOK_PATH=/webhook
+      - HEALTH_PATH=/health
     networks:
+      - bot-network
       - edge
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    security_opt:
+      - no-new-privileges:true
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.fast-aiogentic.rule=Host(`${BASE_DOMAIN:-fast-aiogentic.bartix.de}`)"
+      - "traefik.http.routers.fast-aiogentic.rule=Host(`${BASE_DOMAIN:-jonaheidsick.de}`) && PathPrefix(`/fast-aiogentic`)"
       - "traefik.http.routers.fast-aiogentic.entrypoints=websecure"
+      - "traefik.http.routers.fast-aiogentic.tls=true"
       - "traefik.http.routers.fast-aiogentic.tls.certresolver=letsencrypt"
       - "traefik.http.services.fast-aiogentic.loadbalancer.server.port=8000"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+      - "traefik.http.routers.fast-aiogentic.middlewares=fast-aiogentic-strip,fast-aiogentic-security"
+      - "traefik.http.middlewares.fast-aiogentic-strip.stripprefix.prefixes=/fast-aiogentic"
+      - "traefik.http.middlewares.fast-aiogentic-security.headers.customresponseheaders.X-Content-Type-Options=nosniff"
 
 networks:
+  bot-network:
+    driver: bridge
   edge:
     external: true
