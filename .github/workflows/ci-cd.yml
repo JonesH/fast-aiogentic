@@ -162,6 +162,26 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
+      - name: Create local .env for Docker Compose
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          IMAGE_TAG: ${{ steps.set-tag.outputs.tag }}
+          BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/docker-volumes/fast-aiogentic' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          cat > .env << EOF
+          IMAGE_NAME=$IMAGE_NAME
+          IMAGE_TAG=$IMAGE_TAG
+          BASE_DOMAIN=$BASE_DOMAIN
+          DEPLOY_PATH=$DEPLOY_PATH
+          TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
+          OPENROUTER_API_KEY=$OPENROUTER_API_KEY
+          WEBHOOK_ENABLED=true
+          WEBHOOK_URL=https://$BASE_DOMAIN/fast-aiogentic/webhook
+          EOF
+
       - name: Deploy via Docker SSH
         env:
           DOCKER_HOST: ssh://${{ secrets.SSH_USER || 'deploy' }}@${{ secrets.SSH_HOST }}
@@ -213,6 +233,26 @@ jobs:
           DOCKER_HOST: ssh://${{ secrets.SSH_USER || 'deploy' }}@${{ secrets.SSH_HOST }}
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Create local .env for rollback
+        env:
+          PREVIOUS_TAG: ${{ needs.deploy.outputs.previous_tag }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/docker-volumes/fast-aiogentic' }}
+          BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          cat > .env << EOF
+          IMAGE_NAME=$IMAGE_NAME
+          IMAGE_TAG=$PREVIOUS_TAG
+          BASE_DOMAIN=$BASE_DOMAIN
+          DEPLOY_PATH=$DEPLOY_PATH
+          TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
+          OPENROUTER_API_KEY=$OPENROUTER_API_KEY
+          WEBHOOK_ENABLED=true
+          WEBHOOK_URL=https://$BASE_DOMAIN/fast-aiogentic/webhook
+          EOF
 
       - name: Restore previous version
         env:
