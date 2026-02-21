@@ -95,7 +95,6 @@ jobs:
     needs: build-push
     # Run after build-push OR immediately if deploying specific tag
     if: ${{ always() && (needs.build-push.result == 'success' || inputs.tag) }}
-    environment: production
     outputs:
       previous_tag: ${{ steps.backup.outputs.previous_tag }}
       deployed_tag: ${{ steps.set-tag.outputs.tag }}
